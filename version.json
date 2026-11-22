@@ -1,5 +1,5 @@
 {
-  "version": "2.1.0-beta.4",
-  "changelog": "The start-up screen can no longer last forever: a kernel that cannot be started is now handled like one that crashed (restart, automatic restore, recovery screen), the npm repair has a time limit, packages missing right after an update that never booted restore the previous version instead of running npm, and after three minutes without a kernel the recovery screen appears. Includes the 2.1.0-beta.3 fixes: no restart offer in the middle of an update, a calm start-up screen, no empty setup sections, and the Updater tells you when a channel is older.",
+  "version": "2.1.0-beta.5",
+  "changelog": "The GitHub addresses are back to hyadeOSS: the software is called hyadeOS but the GitHub organisation is still hyadeOSS, and the rename had changed the addresses used by the updater, the Store and the downloads to ones that do not exist (404), so the update check failed. Installs that already run 2.1.0-beta.2 to 2.1.0-beta.4 cannot fetch this update by themselves: reinstall with the new installer.",
   "_comment": "obb."
 }
