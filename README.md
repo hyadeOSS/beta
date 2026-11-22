@@ -1,6 +1,12 @@
 <img width="450" alt="HyadeOSS" src="https://github.com/user-attachments/assets/41c7b3f5-6e0e-47d4-8984-e549f3be257e" />
 
-# hyadeOSS
+# hyadeOSS Beta
+
+> **This is the beta channel.** It gets new things before [stable](https://github.com/hyadeOSS/stable),
+> and it may have bugs. Switch to it in **Settings › Updates**, and go back to stable the same way.
+>
+> **New in this beta: the same hyadeOSS on Windows, Linux and macOS.** Wi-Fi, Bluetooth, what is
+> playing and Sandbox no longer need Windows tools. See [Linux and macOS](#linux-and-macos).
 
 **A light, modern desktop that runs on your PC**: its own design, accounts, an app store
 and safe automatic updates. Open source, no ads, no data collected.
@@ -12,6 +18,29 @@ the installer needs nothing else (no Git, no Node.js). Your data lives in your W
 folder, so updates and reinstalls never touch it.
 
 Already using hyadeOSS? It updates itself: **Settings › Updates › Check for updates**.
+
+## Linux and macOS
+
+hyadeOSS is still an Electron app: it needs Node.js 22 and, to start the desktop, Electron.
+
+```bash
+npm install
+npm run desktop
+```
+
+What each system uses for its own hardware (all optional: a feature whose tool is missing is
+simply empty or off, never an error):
+
+| Feature | Windows | Linux | macOS |
+| --- | --- | --- | --- |
+| Wi-Fi: status, scan, connect, on/off | PowerShell + netsh | NetworkManager (`nmcli`) | `networksetup` |
+| Bluetooth: devices, connect, on/off | Windows Bluetooth | BlueZ (`bluetoothctl`, `rfkill`) | `blueutil` |
+| Connect/disconnect alerts with battery | Windows Bluetooth | `bluetoothctl` | `blueutil` |
+| What is playing | Windows media session | `playerctl` | not available yet |
+| Windows keys (Win+S, Win+W…) | system hook | the Super key, inside the window | the Command key, inside the window |
+
+Known limits: on macOS 14.4 and later the Wi-Fi name is hidden from programs that have no Location
+permission, and the old `airport` scanner is gone, so the list may show only the network you are on.
 
 ## What you get
 

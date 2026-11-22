@@ -140,7 +140,8 @@ const { createRollbackPoint, readRollbackPoint } = require("./lib/rollback");
 const { createMailClient } = require("./lib/mail");
 const { createSessions, createPasswordGuard } = require("./lib/session");
 const { createUsers, OWNER_ID, withinHours } = require("./lib/users");
-const { createZip, readZip } = require("./lib/zip");
+const { createZip, readZip, extractZip } = require("./lib/zip");
+const platformLayer = require("./lib/platform");
 const { releaseZipUrl, downloadReleaseZip, stageReleaseZip } = require("./lib/release-zip");
 
 function readStagedVersion(stagePath) {
@@ -858,38 +859,25 @@ app.get("/api/system/quick-settings", (req, res) => {
   
   config.quickSettings.isEthernet = isEthernet;
 
-  let wifiCmd = "";
-  if (currentOS === "win32") {
-    wifiCmd = 'netsh wlan show interfaces';
-  } else if (currentOS === "darwin") {
-    wifiCmd = '/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport -I';
-  } else {
-    wifiCmd = 'iwgetid -r';
-  }
+  const finish = (realWifi) => {
+    config.quickSettings.connectedWifi = realWifi || "Disconnected";
 
-  exec(wifiCmd, (err, stdout) => {
-    let realWifi = "Disconnected";
-    if (!err && stdout) {
-      if (currentOS === "win32") {
-        const match = stdout.match(/^\s*SSID\s*:\s*(.+)$/m);
-        if (match) realWifi = match[1].trim();
-      } else if (currentOS === "darwin") {
-        const match = stdout.match(/^\s*SSID:\s*(.+)$/m);
-        if (match) realWifi = match[1].trim();
-      } else {
-        const match = stdout.trim();
-        if (match) realWifi = match;
-      }
-    }
-    
-    config.quickSettings.connectedWifi = realWifi;
-    
     if (config.quickSettings.connectedBt === "Wireless Headphones") {
-       config.quickSettings.connectedBt = "On"; 
+       config.quickSettings.connectedBt = "On";
     }
-    
+
     res.json(config.quickSettings);
-  });
+  };
+
+  if (currentOS === "win32") {
+    exec('netsh wlan show interfaces', (err, stdout) => {
+      const match = !err && stdout ? stdout.match(/^\s*SSID\s*:\s*(.+)$/m) : null;
+      finish(match ? match[1].trim() : null);
+    });
+  } else {
+    // Linux (NetworkManager, then iwgetid) and macOS (networksetup): see lib/platform.js.
+    platformLayer.getWifiSsid(currentOS).then(finish, () => finish(null));
+  }
 });
 
 // Windows: Wi-Fi and Bluetooth go through lib/windows-radios.ps1, which needs no admin rights.
@@ -907,20 +895,14 @@ function runWindowsRadios(args, env = {}) {
   });
 }
 
-function runCommand(cmd) {
-  return new Promise((resolve, reject) => exec(cmd, err => (err ? reject(err) : resolve())));
-}
-
 function setWifiPower(on) {
   if (currentOS === "win32") return runWindowsRadios(["-Action", "set", "-Kind", "WiFi", "-On", on ? "1" : "0"]);
-  if (currentOS === "darwin") return runCommand(`networksetup -setairportpower en0 ${on ? 'on' : 'off'}`);
-  return runCommand(`nmcli radio wifi ${on ? 'on' : 'off'}`);
+  return platformLayer.setWifiPower(currentOS, on);
 }
 
 function setBluetoothPower(on) {
   if (currentOS === "win32") return runWindowsRadios(["-Action", "set", "-Kind", "Bluetooth", "-On", on ? "1" : "0"]);
-  if (currentOS === "darwin") return runCommand(`blueutil -p ${on ? '1' : '0'}`);
-  return runCommand(`rfkill ${on ? 'unblock' : 'block'} bluetooth`);
+  return platformLayer.setBluetoothPower(currentOS, on);
 }
 
 // Airplane mode turns every radio off and remembers how they were, to put them back after.
@@ -1031,28 +1013,11 @@ app.get("/api/system/ethernet-stats", (req, res) => {
 
 // 1. WI-FI SCANNING
 app.get("/api/system/networks", (req, res) => {
-  if (currentOS === "linux") {
-    exec("nmcli -t -f SSID,SIGNAL,SECURITY,IN-USE dev wifi list --rescan yes", (err, stdout) => {
-      if (err) return res.json({ success: true, networks: [] });
-      const lines = stdout.trim().split("\n").filter(Boolean);
-      const seen = new Set();
-      const networks = [];
-
-      lines.forEach(line => {
-        const parts = line.split(":");
-        if (parts.length >= 3) {
-          const ssid = parts[0].replace(/\\:/g, ":").trim();
-          const signal = parseInt(parts[1], 10) || 0;
-          const security = parts[2];
-          const connected = parts[3] === "*";
-
-          if (ssid && !seen.has(ssid)) {
-            seen.add(ssid);
-            networks.push({ ssid, signal, secured: security !== "" && security !== "--", connected });
-          }
-        }
-      });
-      res.json({ success: true, networks });
+  if (currentOS === "linux" || currentOS === "darwin") {
+    // nmcli on Linux; on macOS the networks the system lets a program see (see lib/platform.js).
+    platformLayer.scanWifi(currentOS).then(networks => res.json({ success: true, networks }), error => {
+      console.error("Wi-Fi scan error:", error.message);
+      res.json({ success: true, networks: [] });
     });
 
   } else if (currentOS === "win32") {
@@ -1073,33 +1038,6 @@ app.get("/api/system/networks", (req, res) => {
       res.json({ success: true, networks: [] });
     });
 
-  } else if (currentOS === "darwin") {
-    const airportPath = "/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport";
-    exec(`${airportPath} -s`, (err, stdout) => {
-      if (err) return res.json({ success: true, networks: [] });
-      const lines = stdout.trim().split("\n").slice(1);
-      const networks = [];
-
-      lines.forEach(line => {
-        const parts = line.trim().split(/\s+/);
-        if (parts.length >= 7) {
-          const ssid = parts[0];
-          const rssi = parseInt(parts[2], 10);
-          const signal = Math.min(100, Math.max(0, (rssi + 100) * 2));
-          const security = parts[6];
-
-          if (ssid && !networks.find(n => n.ssid === ssid)) {
-            networks.push({
-              ssid: ssid,
-              signal: signal,
-              secured: security !== "NONE",
-              connected: config.quickSettings.connectedWifi === ssid
-            });
-          }
-        }
-      });
-      res.json({ success: true, networks });
-    });
   } else {
     res.json({ success: true, networks: [] });
   }
@@ -1127,6 +1065,20 @@ app.post("/api/system/connect-wifi", (req, res) => {
       res.json({ success: true, connectedWifi: ssid });
     }).catch(() => res.status(500).json({ success: false, error: "Unable to connect to the network." }));
   }
+  // Linux and macOS: the tool is started with an argument list, never through a shell, so the
+  // name and password can hold any character (quotes and $ are common in real passwords).
+  if (currentOS === "linux" || currentOS === "darwin") {
+    if (typeof ssid !== "string" || ssid.startsWith("-") || (password !== undefined && password !== null && typeof password !== "string")) {
+      return res.status(400).json({ success: false, error: "Invalid SSID or password." });
+    }
+    return platformLayer.connectWifi(currentOS, ssid, password || "").then(() => {
+      config.quickSettings.connectedWifi = ssid;
+      config.quickSettings.wifi = true;
+      fs.writeFileSync(configFile, JSON.stringify(config, null, 2));
+      res.json({ success: true, connectedWifi: ssid });
+    }).catch(() => res.status(500).json({ success: false, error: "Unable to connect to the network." }));
+  }
+
   if (typeof ssid !== "string" || SHELL_UNSAFE.test(ssid) ||
       (password !== undefined && password !== null &&
         (typeof password !== "string" || SHELL_UNSAFE.test(password)))) {
@@ -1134,12 +1086,8 @@ app.post("/api/system/connect-wifi", (req, res) => {
   }
 
   let cmd = "";
-  if (currentOS === "linux") {
-    cmd = password ? `nmcli dev wifi connect "${ssid}" password "${password}"` : `nmcli dev wifi connect "${ssid}"`;
-  } else if (currentOS === "win32") {
+  if (currentOS === "win32") {
     cmd = `netsh wlan connect name="${ssid}"`;
-  } else if (currentOS === "darwin") {
-    cmd = password ? `networksetup -setairportnetwork en0 "${ssid}" "${password}"` : `networksetup -setairportnetwork en0 "${ssid}"`;
   }
 
   exec(cmd, (err) => {
@@ -1154,33 +1102,12 @@ app.post("/api/system/connect-wifi", (req, res) => {
 
 // 3. BLUETOOTH DEVICES
 app.get("/api/system/bt-devices", (req, res) => {
-  if (currentOS === "linux") {
-    exec("bluetoothctl devices", (err, stdout) => {
-      if (err) return res.json({ success: true, devices: [] });
-      const lines = stdout.trim().split("\n").filter(Boolean);
-      const devices = [];
-
-      exec("bluetoothctl info", (infoErr, infoStdout) => {
-        const activeMac = !infoErr && infoStdout.includes("Connected: yes") 
-          ? infoStdout.match(/Device ([0-9A-F:]+)/i)?.[1] 
-          : null;
-
-        lines.forEach(line => {
-          const match = line.match(/^Device\s+([0-9A-F:]+)\s+(.+)$/i);
-          if (match) {
-            const mac = match[1];
-            const name = match[2];
-            devices.push({
-              mac: mac,
-              name: name,
-              type: name.toLowerCase().includes("head") || name.toLowerCase().includes("airpods") ? "headset" : "bluetooth",
-              connected: mac === activeMac || config.quickSettings.connectedBt === name
-            });
-          }
-        });
-        res.json({ success: true, devices });
-      });
-    });
+  if (currentOS === "linux" || currentOS === "darwin") {
+    // bluetoothctl (BlueZ) on Linux, blueutil on macOS: see lib/platform.js.
+    platformLayer.listBluetooth(currentOS).then(devices => {
+      config.quickSettings.connectedBt = (devices.find(device => device.connected) || {}).name || null;
+      res.json({ success: true, devices });
+    }).catch(() => res.json({ success: true, devices: [] }));
 
   } else if (currentOS === "win32") {
     // The driver's "OK" only means paired: ask Windows what is connected right now.
@@ -1193,20 +1120,6 @@ app.get("/api/system/bt-devices", (req, res) => {
       res.json({ success: true, devices: [] });
     });
 
-  } else if (currentOS === "darwin") {
-    exec("blueutil --paired", (err, stdout) => {
-      if (err) return res.json({ success: true, devices: [] });
-      const lines = stdout.trim().split("\n").filter(Boolean);
-      const devices = lines.map(line => {
-        const nameMatch = line.match(/"([^"]+)"/);
-        const macMatch = line.match(/address:\s*([0-9a-f-]+)/i);
-        const name = nameMatch ? nameMatch[1] : "BT Device";
-        const mac = macMatch ? macMatch[1] : "";
-        const connected = line.includes("connected");
-        return { name, mac, type: "bluetooth", connected };
-      });
-      res.json({ success: true, devices });
-    });
   } else {
     res.json({ success: true, devices: [] });
   }
@@ -1229,18 +1142,8 @@ app.post("/api/system/connect-bt", (req, res) => {
   if (currentOS === "win32") return res.status(501).json({ success: false, unsupported: true });
 
   const isConnected = config.quickSettings.connectedBt === name;
-  let cmd = "";
-if (currentOS === "linux") {
-    cmd = `bluetoothctl ${isConnected ? "disconnect" : "connect"} ${target}`;
-  } else if (currentOS === "darwin") {
-    cmd = `blueutil --${isConnected ? "disconnect" : "connect"} ${target}`;
-  }
-  // SECURITY (D-04): win32 had `echo Toggle Bluetooth for ${name}` here — `name` is
-  // user-controlled and was NOT validated (only `target` is), so it was a real shell
-  // command-injection sink (e.g. name = "x & whoami"), reachable by any session WITHOUT
-  // the account password. The echo was a no-op placeholder, so it is removed entirely;
-  // only the validated-MAC branches ever touch the shell now, and never run an empty cmd.
-
+  // SECURITY (D-04): the old win32 branch built a shell command from `name`, which is not
+  // validated. No branch here uses a shell: the tools get the validated MAC as one argument.
   const applyToggle = () => {
     config.quickSettings.connectedBt = isConnected ? null : name;
     config.quickSettings.bluetooth = true;
@@ -1248,8 +1151,14 @@ if (currentOS === "linux") {
     res.json({ success: true, connectedBt: config.quickSettings.connectedBt });
   };
 
-  if (cmd) exec(cmd, applyToggle);
-  else applyToggle();
+  if (currentOS === "linux" || currentOS === "darwin") {
+    platformLayer.connectBluetooth(currentOS, target, !isConnected).then(applyToggle).catch(error => {
+      console.error("Bluetooth connect error:", error.message);
+      res.status(500).json({ success: false, error: "Could not change the Bluetooth connection." });
+    });
+  } else {
+    applyToggle();
+  }
 });
 
 // --- BACKUP & RESTORE ---
@@ -2832,6 +2741,8 @@ function findServerJs(dir) {
   return null;
 }
 
+// ZIPs up to this size are unpacked in memory by hyadeOSS itself; larger ones use the system tool.
+const SANDBOX_INMEMORY_ZIP_BYTES = 64 * 1024 * 1024;
 const sandboxUpload = multer({
   limits: { fileSize: 512 * 1024 * 1024 }, // M-04: VM disk images are large but not unbounded
   storage: multer.diskStorage({
@@ -2858,27 +2769,36 @@ app.post("/api/sandbox/upload", sandboxUpload.single("vmZip"), (req, res) => {
   fs.mkdirSync(vmDisk, { recursive: true });
 
   const zipPath = req.file.path;
-  
-  let extractCmd = "";
-  if (process.platform === "win32") {
-    extractCmd = `powershell.exe -nologo -noprofile -command "Expand-Archive -Path '${zipPath}' -DestinationPath '${vmDisk}' -Force"`;
-  } else {
-    extractCmd = `unzip -o "${zipPath}" -d "${vmDisk}"`;
-  }
 
-  exec(extractCmd, (err, stdout, stderr) => {
-    if (fs.existsSync(zipPath)) fs.unlinkSync(zipPath); 
-    
+  const finishUpload = (err, detail) => {
+    if (fs.existsSync(zipPath)) fs.unlinkSync(zipPath);
     if (err) {
-      console.error("Extraction error:", err.message || stderr);
-      return res.status(500).json({ 
-        success: false, 
-        error: "Failed to extract zip file. Check backend console for details." 
+      console.error("Extraction error:", err.message || detail);
+      return res.status(500).json({
+        success: false,
+        error: "Failed to extract zip file. Check backend console for details."
       });
     }
-    
     res.json({ success: true, message: "VM Disk ready." });
-  });
+  };
+
+  // The same code on every OS: extracted by hyadeOSS itself. Only a ZIP it cannot read (very large,
+  // ZIP64) goes to the system tool: Expand-Archive on Windows, unzip elsewhere.
+  try {
+    if (fs.statSync(zipPath).size <= SANDBOX_INMEMORY_ZIP_BYTES) {
+      extractZip(fs.readFileSync(zipPath), vmDisk);
+      return finishUpload(null);
+    }
+  } catch (error) {
+    console.warn(`Built-in ZIP extraction failed (${error.message}); trying the system tool.`);
+    fs.rmSync(vmDisk, { recursive: true, force: true });
+    fs.mkdirSync(vmDisk, { recursive: true });
+  }
+
+  const extractCmd = process.platform === "win32"
+    ? `powershell.exe -nologo -noprofile -command "Expand-Archive -Path '${zipPath}' -DestinationPath '${vmDisk}' -Force"`
+    : `unzip -o "${zipPath}" -d "${vmDisk}"`;
+  exec(extractCmd, (err, stdout, stderr) => finishUpload(err, stderr));
 });
 
 app.post("/api/sandbox/start", (req, res) => {

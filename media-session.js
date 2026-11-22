@@ -1,13 +1,19 @@
-// hyadeOSS - what is playing on this PC, via the Windows media session (SMTC).
+// hyadeOSS - what is playing on this PC: the Windows media session (SMTC) on Windows, and MPRIS
+// (through the `playerctl` tool) on Linux.
 // (C) 2026 mariowstech and the hyadeOSS team - Licensed under the Apache License, Version 2.0
 //
 // Works with the Spotify desktop app (and other players) without any account or API key,
 // so it is the fallback when the Spotify Web API is unavailable (e.g. no Premium).
 // A single PowerShell helper (tools/media-session.ps1) is kept alive and spoken to over
-// stdin/stdout, one JSON line per command. Windows only.
+// stdin/stdout, one JSON line per command. On Linux no helper is kept: each command runs playerctl
+// (lib/platform.js). macOS has no equivalent that works without a prompt, so it answers "not
+// available" and the desktop hides the feature.
 
+const fs = require("fs");
 const path = require("path");
 const { spawn } = require("child_process");
+const { fileURLToPath } = require("url");
+const platformLayer = require("./lib/platform");
 
 const SCRIPT = path.join(__dirname, "tools", "media-session.ps1");
 const COMMAND_TIMEOUT_MS = 8000;
@@ -47,8 +53,35 @@ function startHelper() {
   });
 }
 
+// Cover art from MPRIS is a file:// or https:// address; the desktop shows a data: or https: image.
+const MAX_COVER_BYTES = 2 * 1024 * 1024;
+function coverImage(artUrl) {
+  if (!artUrl) return null;
+  if (/^https:\/\//i.test(artUrl)) return artUrl;
+  if (!/^file:\/\//i.test(artUrl)) return null;
+  try {
+    const file = fileURLToPath(artUrl);
+    if (fs.statSync(file).size > MAX_COVER_BYTES) return null;
+    const type = { ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".gif": "image/gif" }[path.extname(file).toLowerCase()];
+    return type ? `data:${type};base64,${fs.readFileSync(file).toString("base64")}` : null;
+  } catch { return null; }
+}
+
+async function sendPlayerctl(command) {
+  const anyPlayer = command.startsWith("any:");
+  const plain = anyPlayer ? command.slice(4) : command;
+  if (plain === "get") {
+    const result = await platformLayer.getMediaSession(process.platform, anyPlayer);
+    if (!result.ok || !result.session) return result;
+    const { artUrl, ...session } = result.session;
+    return { ok: true, session: { ...session, image: coverImage(artUrl) } };
+  }
+  return platformLayer.controlMedia(process.platform, plain, anyPlayer);
+}
+
 function send(command) {
-  if (process.platform !== "win32") return Promise.resolve({ ok: false, unsupported: true, error: "Only available on Windows." });
+  if (process.platform === "linux") return sendPlayerctl(command);
+  if (process.platform !== "win32") return Promise.resolve({ ok: false, unsupported: true, error: "Not available on this system." });
   if (!helper) startHelper();
   // Stop the helper when nobody has asked anything for a while.
   clearTimeout(idleTimer);
