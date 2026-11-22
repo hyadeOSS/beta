@@ -486,7 +486,8 @@ require("./online-services").registerOnlineServiceRoutes(app, { getConfig: () =>
 
 app.get('/api/system/health', (req, res) => {
   res.set('Cache-Control', 'no-store');
-  res.json({ status: 'ok', instanceId: BACKEND_INSTANCE_ID });
+  // `updating`: the launcher must not restart the shell while an update is being applied.
+  res.json({ status: 'ok', instanceId: BACKEND_INSTANCE_ID, updating: systemUpdateInProgress });
 });
 
 // --- SYSTEM HEALTH (Settings › General › System health) ---
@@ -3383,10 +3384,14 @@ app.get('/api/system/check-update', async (req, res) => {
     }
     // Newer, or a deliberate way back ("replaces"), and inside the staged rollout (lib/validation.js).
     const offer = updateOffer(remote, local, rolloutBucket(getInstallId()));
+    // `older`: the channel the user picked has a release that is older than the one installed (e.g. Stable
+    // while running a Beta). It is never offered as an update, but the Updater says so and lets the user choose.
+    const older = offer.older === true;
     res.json(
       offer.offered
-        ? { updateAvailable: true, current: local, latest: remote.version, changelog: remote.changelog, reason: offer.reason }
-        : { updateAvailable: false, current: local, latest: remote.version, rolloutWaiting: offer.reason === "rollout" }
+        ? { updateAvailable: true, current: local, latest: remote.version, changelog: remote.changelog, reason: offer.reason, channel }
+        : { updateAvailable: false, current: local, latest: remote.version, rolloutWaiting: offer.reason === "rollout", older, channel,
+            ...(older ? { changelog: remote.changelog } : {}) }
     );
   } catch (error) {
     const versionPath = path.join(__dirname, 'version.json');

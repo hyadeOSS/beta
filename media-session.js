@@ -13,7 +13,10 @@ const fs = require("fs");
 const path = require("path");
 const { spawn } = require("child_process");
 const { fileURLToPath } = require("url");
-const platformLayer = require("./lib/platform");
+// Loaded when first needed, not at startup: an update copies this file before lib/platform.js, and a kernel started in
+// between (a restart, a crash) must still boot. Without the module the feature just reports "not available".
+let platformLayerModule = null;
+const platformLayer = () => platformLayerModule || (platformLayerModule = require("./lib/platform"));
 
 const SCRIPT = path.join(__dirname, "tools", "media-session.ps1");
 const COMMAND_TIMEOUT_MS = 8000;
@@ -71,16 +74,16 @@ async function sendPlayerctl(command) {
   const anyPlayer = command.startsWith("any:");
   const plain = anyPlayer ? command.slice(4) : command;
   if (plain === "get") {
-    const result = await platformLayer.getMediaSession(process.platform, anyPlayer);
+    const result = await platformLayer().getMediaSession(process.platform, anyPlayer);
     if (!result.ok || !result.session) return result;
     const { artUrl, ...session } = result.session;
     return { ok: true, session: { ...session, image: coverImage(artUrl) } };
   }
-  return platformLayer.controlMedia(process.platform, plain, anyPlayer);
+  return platformLayer().controlMedia(process.platform, plain, anyPlayer);
 }
 
 function send(command) {
-  if (process.platform === "linux") return sendPlayerctl(command);
+  if (process.platform === "linux") return sendPlayerctl(command).catch(() => ({ ok: false, unsupported: true, error: "Not available on this system." }));
   if (process.platform !== "win32") return Promise.resolve({ ok: false, unsupported: true, error: "Not available on this system." });
   if (!helper) startHelper();
   // Stop the helper when nobody has asked anything for a while.

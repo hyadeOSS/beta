@@ -11,7 +11,10 @@
 
 const path = require("path");
 const { spawn } = require("child_process");
-const platformLayer = require("./lib/platform");
+// Loaded when first needed, not at startup: an update copies this file before lib/platform.js, and a kernel started in
+// between (a restart, a crash) must still boot. Without the module the feature just reports "not available".
+let platformLayerModule = null;
+const platformLayer = () => platformLayerModule || (platformLayerModule = require("./lib/platform"));
 
 const SCRIPT = path.join(__dirname, "tools", "bluetooth-watch.ps1");
 const RESTART_DELAY_MS = 5000;
@@ -34,8 +37,8 @@ async function pollOnce() {
   if (polling) return;
   polling = true;
   try {
-    const devices = await platformLayer.listBluetooth(process.platform, undefined, { onlyConnected: true });
-    const { next, events } = platformLayer.diffBluetooth(known || new Map(), devices);
+    const devices = await platformLayer().listBluetooth(process.platform, undefined, { onlyConnected: true });
+    const { next, events } = platformLayer().diffBluetooth(known || new Map(), devices);
     // Devices that were already connected when watching began are not announced: only changes are.
     if (known) events.forEach(event => broadcast(JSON.stringify(event)));
     known = next;

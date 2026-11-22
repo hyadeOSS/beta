@@ -1,5 +1,5 @@
 {
-  "version": "2.1.0-beta.2",
-  "changelog": "The project is now correctly named hyadeOS (it was spelled hyadeOSS): text, translations, README, file and variable names and links. Apps, saved settings and installs from before keep working, because the old names are still understood where needed. Links now point to the hyadeOS GitHub organisation.",
+  "version": "2.1.0-beta.3",
+  "changelog": "Fixes: the restart offer no longer appears while an update is still being applied (restarting then could leave the system half updated), the start-up screen no longer shows an error or a broken image on a normal start, the setup highlights no longer show two empty sections, and the Updater now says when the chosen channel is older than your version and lets you switch back with a confirmation.",
   "_comment": "obb."
 }
