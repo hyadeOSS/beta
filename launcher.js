@@ -661,11 +661,31 @@ function relaunchHyadeOS(reason) {
     app.exit(0);
 }
 
-SHELL_FILES.forEach(file => fs.watchFile(file, { interval: 3000 }, () => {
-    if (relaunching || restartOffered || !shellFilesChanged() || !mainWindow || mainWindow.isDestroyed()) return;
-    restartOffered = true;
-    mainWindow.webContents.send('system:restart-needed');
-}));
+// An update replaces launcher.js and preload.js while it is still copying the other files (they come in
+// alphabetical order, long before the end). Restarting at that moment kills the update half done, so the
+// offer waits until the kernel says the update is over, and a restart asked meanwhile is refused.
+async function kernelIsUpdating() {
+    try { return (await requestJson(HEALTH_PATH, { timeoutMs: 1000 })).updating === true; }
+    catch { return false; }
+}
+
+let restartCheckTimer = null;
+function offerRestartWhenUpdateIsDone() {
+    if (restartCheckTimer) return;
+    const check = async () => {
+        restartCheckTimer = null;
+        if (relaunching || restartOffered || !shellFilesChanged() || !mainWindow || mainWindow.isDestroyed()) return;
+        if (await kernelIsUpdating()) {
+            restartCheckTimer = setTimeout(check, 3000);
+            return;
+        }
+        restartOffered = true;
+        mainWindow.webContents.send('system:restart-needed');
+    };
+    restartCheckTimer = setTimeout(check, 0);
+}
+
+SHELL_FILES.forEach(file => fs.watchFile(file, { interval: 3000 }, offerRestartWhenUpdateIsDone));
 
 // --- SCREEN CAPTURE, CLIPBOARD HISTORY, TEXT INPUT ---
 // For the desktop's Win+Shift+S, Win+V and Win+. (emoji) panels. The history is text only
@@ -714,7 +734,12 @@ desktopHandler('clipboard-paste', async text => {
     mainWindow.webContents.paste();
     return true;
 });
-desktopHandler('relaunch', () => { setTimeout(() => relaunchHyadeOS('asked from the desktop'), 200); return true; });
+desktopHandler('relaunch', async () => {
+    // Never in the middle of an update: the files would be left half replaced.
+    if (await kernelIsUpdating()) return false;
+    setTimeout(() => relaunchHyadeOS('asked from the desktop'), 200);
+    return true;
+});
 desktopHandler('insert-text', text => { mainWindow.webContents.insertText(String(text).slice(0, 100)); return true; });
 
 // Without the hook (other systems, or the hook could not start) the keys arrive here,
