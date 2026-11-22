@@ -1,5 +1,5 @@
 {
-  "version": "1.3.4.1",
-  "changelog": "Updated store framework with support for other channels and an integrated button for updating the local repository.",
+  "version": "2.1.0-beta.1",
+  "changelog": "Beta: hyadeOSS now behaves the same on Windows, Linux and macOS. Wi-Fi and Bluetooth (status, scan, connect, power, device connect/disconnect alerts with battery), what's playing (Linux, through playerctl) and Sandbox ZIP import work without Windows tools; networks with a colon in the name, passwords with quotes and Bluetooth devices wrongly shown as connected on macOS are fixed.",
   "_comment": "obb."
 }
