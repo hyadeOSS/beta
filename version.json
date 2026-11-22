@@ -1,5 +1,5 @@
 {
-  "version": "2.1.0-beta.2",
-  "changelog": "The project is now correctly named hyadeOS (it was spelled hyadeOSS): text, translations, README, file and variable names and links. Apps, saved settings and installs from before keep working, because the old names are still understood where needed. Links now point to the hyadeOS GitHub organisation.",
+  "version": "2.1.0-beta.4",
+  "changelog": "The start-up screen can no longer last forever: a kernel that cannot be started is now handled like one that crashed (restart, automatic restore, recovery screen), the npm repair has a time limit, packages missing right after an update that never booted restore the previous version instead of running npm, and after three minutes without a kernel the recovery screen appears. Includes the 2.1.0-beta.3 fixes: no restart offer in the middle of an update, a calm start-up screen, no empty setup sections, and the Updater tells you when a channel is older.",
   "_comment": "obb."
 }
