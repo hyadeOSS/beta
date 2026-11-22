@@ -78,6 +78,7 @@ test("the kernel says whether an update is running", async () => {
     env: { PATH: process.env.PATH, NODE_PATH: path.join(SYSTEM, "node_modules"), HYADEOS_PORT: String(port), HYADEOS_MAIL_RELAY_URL: "http://127.0.0.1:9" },
     stdio: "ignore"
   });
+  const exited = new Promise(resolve => child.once("exit", resolve));
   try {
     let health = null;
     const deadline = Date.now() + 30000;
@@ -89,7 +90,9 @@ test("the kernel says whether an update is running", async () => {
     assert.equal(health.status, "ok");
     assert.equal(health.updating, false, "idle: the launcher may restart the shell");
   } finally {
+    // On Windows the folder stays locked until the process has really exited; a leftover temp folder is not a failure.
     child.kill();
-    fs.rmSync(root, { recursive: true, force: true });
+    await Promise.race([exited, new Promise(resolve => setTimeout(resolve, 5000))]);
+    try { fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }); } catch (error) { /* left behind in the temp folder */ }
   }
 });
