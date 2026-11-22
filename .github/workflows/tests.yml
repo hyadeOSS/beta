@@ -1,5 +1,5 @@
 # Runs the kernel tests (test/*.test.js) on every pull request and push to main, on Linux,
-# Windows and macOS: hyadeOSS has to behave the same on all three.
+# Windows and macOS: hyadeOS has to behave the same on all three.
 name: Tests
 
 on:
