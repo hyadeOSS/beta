@@ -222,7 +222,7 @@ test("controlling the player targets the player that was picked", async () => {
 });
 
 test("extractZip writes files and refuses names that escape the folder", () => {
-  const folder = fs.mkdtempSync(path.join(os.tmpdir(), "hyadeoss-zip-"));
+  const folder = fs.mkdtempSync(path.join(os.tmpdir(), "hyadeos-zip-"));
   try {
     const good = createZip([{ name: "disk/server.js", data: Buffer.from("console.log(1)") }]);
     assert.equal(extractZip(good, path.join(folder, "ok")), 1);
