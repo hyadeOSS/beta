@@ -9,6 +9,7 @@ const os = require('os');
 const path = require('path');
 const { pathToFileURL } = require('url');
 const { envVar, envPair } = require('./lib/env');
+const kernelGuard = require('./lib/kernel-guard');
 
 app.commandLine.appendSwitch('enable-gpu-rasterization');
 app.commandLine.appendSwitch('enable-features', 'CSSBackdropFilter');
@@ -180,6 +181,7 @@ function rememberKernelError(text) {
 // times in a row. Automatic restarts stop; the user picks what to do next.
 function showKernelRecovery() {
     inKernelRecovery = true;
+    bootWatchdog.disarm();
     clearTimeout(backendRestartTimer);
     backendRestartTimer = null;
     console.error('[sniffer]: kernel keeps failing; showing the recovery screen.');
@@ -281,7 +283,18 @@ ipcMain.handle('hyadeos:recovery-quit', (event) => {
     return { ok: true };
 });
 
+// Whatever goes wrong, the start-up screen must not last forever: after this long without a kernel that
+// answers, the recovery screen (retry, restore the previous version, repair, open the log) takes its place.
+const KERNEL_START_LIMIT_MS = 3 * 60 * 1000;
+const NPM_INSTALL_LIMIT_MS = 2 * 60 * 1000;
+const bootWatchdog = kernelGuard.createWatchdog(KERNEL_START_LIMIT_MS, () => {
+    if (backendReady || shuttingDown || inKernelRecovery || relaunching) return;
+    console.error('[sniffer]: the kernel did not become ready in time; showing the recovery screen.');
+    showKernelRecovery();
+});
+
 function showBootScreen() {
+    bootWatchdog.arm();
     if (!mainWindow || mainWindow.isDestroyed()) return;
     mainWindow.loadFile(bootPage, { query: getBootQuery() }).catch(error => {
         console.error('[sniffer]: could not show boot screen:', error);
@@ -339,38 +352,36 @@ let dependencyRepairRunning = false;
 
 function findMissingKernelDependencies() {
     try {
-        const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8'));
-        return Object.keys(manifest.dependencies || {})
-            .filter(name => !fs.existsSync(path.join(__dirname, 'node_modules', ...name.split('/'), 'package.json')));
+        return kernelGuard.findMissingKernelDependencies(__dirname);
     } catch (error) {
         console.error('[sniffer]: could not read kernel dependencies:', error.message);
         return [];
     }
 }
 
+// With a time limit: a hung `npm install` used to leave the start-up screen up for good.
 function installKernelDependencies() {
-    return new Promise(resolve => {
-        // Fixed command string: npm is a .cmd shim on Windows, so it needs a shell.
-        const child = spawn('npm install --omit=dev --no-audit --no-fund', {
-            cwd: __dirname,
-            shell: true,
-            stdio: ['ignore', 'pipe', 'pipe'],
-            windowsHide: true
-        });
-        child.stdout.on('data', data => console.log(`[npm]: ${data.toString().trim()}`));
-        child.stderr.on('data', data => console.error(`[npm]: ${data.toString().trim()}`));
-        child.on('error', error => {
-            console.error('[sniffer]: could not run npm:', error.message);
-            resolve(false);
-        });
-        child.on('exit', code => resolve(code === 0));
-    });
+    return kernelGuard.installKernelDependencies(__dirname, { timeoutMs: NPM_INSTALL_LIMIT_MS });
 }
 
 function startBackend() {
     if (backendProcess || shuttingDown || dependencyRepairRunning) return;
     if (!dependencyRepairAttempted) {
         const missing = findMissingKernelDependencies();
+        // Packages missing right after an update that never booted: it was most likely interrupted. Going back is
+        // safer (and quicker) than `npm install` on top of a half-replaced node_modules.
+        if (kernelGuard.shouldRestoreBeforeRepair(__dirname, missing, rollback)) {
+            try {
+                const restored = rollback.restoreRollbackPoint(__dirname);
+                console.warn(`[sniffer]: packages missing after update ${restored.toVersion || ''}; restored ${restored.fromVersion || 'the previous version'}.`);
+                backendRestartAttempt = 0;
+                dependencyRepairAttempted = true;
+                startBackend();
+                return;
+            } catch (error) {
+                console.error('[sniffer]: could not restore the previous version:', error.message);
+            }
+        }
         if (missing.length) {
             dependencyRepairAttempted = true;
             dependencyRepairRunning = true;
@@ -383,6 +394,7 @@ function startBackend() {
             return;
         }
     }
+    bootWatchdog.arm();
     const instanceId = crypto.randomBytes(16).toString('hex');
     const updateMarker = path.join(os.tmpdir(), `hyadeos-update-${process.pid}-${instanceId}.json`);
     const child = spawn(envVar('NODE_EXECUTABLE') || 'node', ['server.js'], {
@@ -409,8 +421,13 @@ function startBackend() {
         console.error(`[kernel]: ${text}`);
         rememberKernelError(text);
     });
-    child.on('error', error => console.error('[sniffer]: kernel couldn\'t start', error));
-    child.on('exit', (code, signal) => {
+    child.on('error', error => {
+        console.error('[sniffer]: kernel couldn\'t start', error);
+        rememberKernelError(`could not start the kernel: ${error.message}`);
+    });
+    // 'exit', or a kernel that could not even be started: Node emits only 'error' then, and the restart, the
+    // automatic rollback and the recovery screen all hang on this handler.
+    kernelGuard.watchChildGone(child, (code, signal) => {
         if (backendProcess === child) backendProcess = null;
         backendReady = false;
         if (shuttingDown) {
@@ -483,6 +500,7 @@ function startBackend() {
     void waitForBackendHealth(child, instanceId).then(() => {
         if (!isLiveChild(child) || shuttingDown) return;
         backendReady = true;
+        bootWatchdog.disarm();
         backendRestartAttempt = 0;
         inKernelRecovery = false;
         try { rollback.markRollbackVerified(__dirname); }

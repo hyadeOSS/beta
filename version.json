@@ -1,5 +1,5 @@
 {
-  "version": "2.1.0-beta.3",
-  "changelog": "Fixes: the restart offer no longer appears while an update is still being applied (restarting then could leave the system half updated), the start-up screen no longer shows an error or a broken image on a normal start, the setup highlights no longer show two empty sections, and the Updater now says when the chosen channel is older than your version and lets you switch back with a confirmation.",
+  "version": "2.1.0-beta.4",
+  "changelog": "The start-up screen can no longer last forever: a kernel that cannot be started is now handled like one that crashed (restart, automatic restore, recovery screen), the npm repair has a time limit, packages missing right after an update that never booted restore the previous version instead of running npm, and after three minutes without a kernel the recovery screen appears. Includes the 2.1.0-beta.3 fixes: no restart offer in the middle of an update, a calm start-up screen, no empty setup sections, and the Updater tells you when a channel is older.",
   "_comment": "obb."
 }
