@@ -1,5 +1,5 @@
 {
-  "version": "2.1.0-beta.5",
-  "changelog": "The GitHub addresses are back to hyadeOSS: the software is called hyadeOS but the GitHub organisation is still hyadeOSS, and the rename had changed the addresses used by the updater, the Store and the downloads to ones that do not exist (404), so the update check failed. Installs that already run 2.1.0-beta.2 to 2.1.0-beta.4 cannot fetch this update by themselves: reinstall with the new installer.",
+  "version": "2.1.0-beta.6",
+  "changelog": "Settings > About has a new look: Credits now roll like film credits, Legal & privacy holds the License, Terms of use and Privacy, and Health & safety explains device care. Hold the logo for a surprise.",
   "_comment": "obb."
 }
